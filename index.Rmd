@@ -1,0 +1,412 @@
+---
+title: "Greenspace Demo"
+runtime: shiny_prerendered
+output: flexdashboard::flex_dashboard
+orientation: columns
+theme: simplex
+---
+
+```{r, context='setup', include=FALSE}
+library(flexdashboard)
+library(shiny)
+library(raster)
+library(leaflet)
+#library(DT)
+library(magrittr)
+library(colorspace)
+library(rgeos)
+library(ggplot2)
+#library(shinyjs)
+#library(plotly)
+library(DiagrammeR)
+library(rgdal)
+library(sf)
+#library(tidyverse)
+
+#root<-"~/Documents/Exeter/Eservices_Data/"; in.root<-"/Volumes/Pocket Sam/Data/"
+#in.root<-"/Users/jm622/apps/"
+
+###################################
+# Greenspace
+####################################
+in.root<-""
+dir_shape<-paste(in.root,"www/", sep="")
+
+################################################
+# Global FUNCTIONS
+###############################################
+# Return path to raster of ecosystem service map
+ # returns variable to be used for mapping
+calc_grnsp <- function(alot,relg,pkgd,golf,sports,play,open, mapdata) {
+  # save and remove geometry converting to normal df
+  g<-mapdata[,21]
+  st_geometry(mapdata) <- NULL 
+  names(mapdata)<-c("soa","objectid","lsoa11nm","lsoa11nmw","st_lengths",   
+                     "Allotments","Bowling_Green","Cemetery","Golf_Course","Sports" ,          
+                     "Play_Space", "Playing_Field","Park_Garden","Religious_Grounds","Tennis_Court",     
+                    "Open_Access", "All.Ages","Ages.0.18","Ages.19.69","Ages.70.90" )
+  
+  # sum  greenspace 
+  area<-rep(0,length(mapdata$soa))  
+  if(alot) area<-area+mapdata[,c("Allotments")]
+  if(relg) area<-area+mapdata[,c("Cemetery")]+mapdata[,c("Religious_Grounds")]
+  if(pkgd) area<-area+mapdata[,c("Park_Garden")]
+  if(golf) area<-area + mapdata[,c("Golf_Course")]
+  if(sports) area<-area + mapdata[,c("Sports")] + mapdata[,c("Bowling_Green")] + mapdata[,c("Tennis_Court")]
+  if(play) area<-area + mapdata[,c("Play_Space")] + mapdata[,c("Playing_Field")]
+  if(open) area<-area + mapdata[,c("Open_Access")]
+  
+  mapdata$area<-area
+  mapdata$area_per_pop<-round(mapdata$area/mapdata$All.Ages,1)
+  mapdata<-mapdata[,c(1,17,21,22)] # DO NOT USE @data !!
+  # Reset geometry to original
+  st_geometry(mapdata)<-st_geometry(g)
+  return(mapdata)
+}
+
+# Calculate bar chart data for all of Cornwall
+calc_chartdata_1<-function(alot,relg,pkgd,golf,sports,play,open,mapdata){
+    names(mapdata)<-c("soa","objectid","lsoa11nm","lsoa11nmw","st_lengths",   
+                      "Allotments","Bowling_Green","Cemetery","Golf_Course","Sports" ,          
+                      "Play_Space", "Playing_Field","Park_Garden","Religious_Grounds","Tennis_Court",     
+                      "Open_Access", "All.Ages","Ages.0.18","Ages.19.69","Ages.70.90" )
+    # Select data only for polygon of interest
+    # converts to normal dataframe
+    st_geometry(mapdata) <- NULL 
+    # sum basic greenspace (where no options = TRUE)
+    area.sums<-colSums(mapdata[,c(6:16)],na.rm=TRUE) # array
+
+    # Calc chart data according to definition of greenspace
+    chartdata<-data.frame(type=c("Allotments", "Golf Courses", "Open Access Land", "Parks & Gardens", "Playing fields",  "Religious & Cemetery", "Sports" ), area=c(area.sums[1],area.sums[4],area.sums[11],area.sums[8], sum(area.sums[c(6:7)]), sum(area.sums[c(3,9)]),sum(area.sums[c(2,5,10)])  ) ) 
+    
+    if(!alot) chartdata<-chartdata[-which(chartdata$type=="Allotments"),]
+    if(!relg) chartdata<-chartdata[-which(chartdata$type=="Religious & Cemetery"),]
+    if(!pkgd) chartdata<-chartdata[-which(chartdata$type=="Parks & Gardens"),]
+    if(!golf) chartdata<-chartdata[-which(chartdata$type=="Golf Courses"),]
+    if(!sports) chartdata<-chartdata[-which(chartdata$type=="Sports"),]
+    if(!play) chartdata<-chartdata[-which(chartdata$type=="Playing fields"),] 
+    if(!open) chartdata<-chartdata[-which(chartdata$type=="Open Access Land"),]
+    
+    chartdata[,"area"]<-chartdata[,"area"]/10000
+    return(chartdata)
+}
+
+
+# Calculate bar chart data for chosen polygon on basis of selected greenspace map
+calc_chartdata_2<-function(alot,relg,pkgd,golf,sports,play,open,mapdata,polygon){
+    names(mapdata)<-c("soa","objectid","lsoa11nm","lsoa11nmw","st_lengths",   
+                      "Allotments","Bowling_Green","Cemetery","Golf_Course","Sports" ,          
+                      "Play_Space", "Playing_Field","Park_Garden","Religious_Grounds","Tennis_Court",     
+                      "Open_Access", "All.Ages","Ages.0.18","Ages.19.69","Ages.70.90" )
+    
+    # Select data only for polygon of interest
+    #print(class(mapdata))
+    # converts to normal dataframe
+    st_geometry(mapdata) <- NULL 
+    mapdata<-mapdata[polygon,]
+    # sum basic greenspace (where no options = TRUE)
+    area.sums<-colSums(mapdata[,c(6:16)],na.rm=TRUE) # array
+
+    # Calc chart data according to definition of greenspace
+    chartdata<-data.frame(type=c("Allotments", "Golf Courses", "Open Access Land", "Parks & Gardens", "Playing fields",  "Religious & Cemetery", "Sports" ), area=c(area.sums[1],area.sums[4],area.sums[11],area.sums[8], sum(area.sums[c(6:7)]), sum(area.sums[c(3,9)]),sum(area.sums[c(2,5,10)])  ) ) 
+    
+    if(!alot) chartdata<-chartdata[-which(chartdata$type=="Allotments"),]
+    if(!relg) chartdata<-chartdata[-which(chartdata$type=="Religious & Cemetery"),]
+    if(!pkgd) chartdata<-chartdata[-which(chartdata$type=="Parks & Gardens"),]
+    if(!golf) chartdata<-chartdata[-which(chartdata$type=="Golf Courses"),]
+    if(!sports) chartdata<-chartdata[-which(chartdata$type=="Sports"),]
+    if(!play) chartdata<-chartdata[-which(chartdata$type=="Playing fields"),] 
+    if(!open) chartdata<-chartdata[-which(chartdata$type=="Open Access Land"),]
+    
+    chartdata[,"area"]<-chartdata[,"area"]/10000
+    return(chartdata)
+}
+
+# Determine which polygon coorinates fall within
+# https://github.com/r-spatial/sf/wiki/migrating
+
+find_polygon <- function(polygons, point) {
+  result<-st_intersects(polygons,point)
+  final<-which(result==1)
+  #polygon.sf<-polygons[final,]
+  return(final)
+}
+
+```
+
+
+```{r,context='data', include=FALSE}
+# Load greenspace data 
+greenspace.sf<-st_read(paste(dir_shape,"GrnSpc_by_SOA_map.shp",sep=""))
+
+```
+Greenspace Explorer
+============================================================================================
+Column {.sidebar}
+-----------------------------------------------------------------------
+### Define Greenspace
+
+Greenspace includes allotments and parks & gardens, but might also be defined to include large areas such as golf courses and open access land.
+
+Tick boxes to INCLUDE features:
+```{r}
+
+   checkboxInput("alot", "Include Allotments", value = TRUE)
+   checkboxInput("relg", "Include Religious grounds", value = TRUE)
+   checkboxInput("pkgd", "Include Parks & Gardens", value = TRUE)
+   checkboxInput("play", "Include Playing fields & spaces", value = TRUE)
+   checkboxInput("golf", "Include Golf courses", value = FALSE)
+   checkboxInput("sports", "Include Sports facilities", value = TRUE)
+   checkboxInput("open", "Include Open Access Areas", value = FALSE)
+   
+```
+
+Note: maps recalculates after EVERY change - please be  patient!
+
+### Map controls
+```{r}
+sliderInput("visibility.gsp","Map transparency:",min=0,max=1,value=0.7)
+
+```
+
+Column {data-width=600}
+------------------------------------------------------------------------------------------------------------
+### Amount of Greenspace by Population 
+```{r}
+leafletOutput("map")
+```
+
+```{r, context="server", include=FALSE}
+
+#use reactive values to store the data you generate from a shape click
+clickval <- reactiveValues()
+clickval$polygon <- NULL
+#clickval$soa<-NULL
+  
+# Reactive function to calculate mapdata and pallete for display returns both as list
+map_change <- reactive({
+  req(!is.null(input$alot))
+  req(!is.null(input$relg))
+  req(!is.null(input$pkgd))
+  req(!is.null(input$golf))
+  req(!is.null(input$sports))
+  req(!is.null(input$play))
+  req(!is.null(input$open))
+  mapdata<-calc_grnsp(input$alot,input$relg,input$pkgd,input$golf,input$sports,input$play,input$open,
+                      greenspace.sf) 
+  
+  q<-quantile(mapdata$area_per_pop,c(0,0.05,0.1,0.2,0.4,0.6,0.8,0.9,0.95,1),names=FALSE,na.rm=TRUE)
+  bins <- unique(q)
+  pal <- colorBin("Greens", domain = mapdata$area_per_pop, bins = bins, pretty=TRUE)
+  fillcolour<-~pal(mapdata$area_per_pop)
+  
+  return(list(mapdata,fillcolour))
+})
+ 
+
+# Charts greenspace mix for selected polygon
+chartdata_1<-reactive({
+   req(!is.null(input$alot))
+  req(!is.null(input$relg))
+  req(!is.null(input$pkgd))
+  req(!is.null(input$golf))
+  req(!is.null(input$sports))
+  req(!is.null(input$play))
+  req(!is.null(input$open))
+  # print(paste(input$alot,input$relg,input$pkgd,input$golf,input$sports,input$open,input$play))
+  calc_chartdata_1( input$alot,input$relg,input$pkgd,input$golf,input$sports,input$play,input$open,greenspace.sf)
+})
+
+# Charts greenspace mix for selected polygon
+chartdata_2<-reactive({
+   req(!is.null(input$alot))
+  req(!is.null(input$relg))
+  req(!is.null(input$pkgd))
+  req(!is.null(input$golf))
+  req(!is.null(input$sports))
+  req(!is.null(input$play))
+  req(!is.null(input$open))
+  req(!is.null(clickval$polygon))  
+  #print(paste(input$alot,input$relg,input$pkgd,input$golf,input$sports,input$open,input$play,clickval$polygon))
+  calc_chartdata_2( input$alot,input$relg,input$pkgd,input$golf,input$sports,input$play,input$open,greenspace.sf,clickval$polygon )
+})
+
+# Display basic map - take input defaults as first map - check
+output$map <- renderLeaflet({
+      leaflet() %>% 
+      setView(lng = -4.8, lat = 50.5, zoom = 9) %>% 
+      addTiles()  %>%  
+      addScaleBar()
+})
+
+# Observe to change map Polygons if required
+observe({
+  # Define colours 
+  visibility<-input$visibility.gsp
+  parameters<-map_change()
+  mapdata<-parameters[[1]]  
+  fillcolour<-parameters[[2]]
+  
+  # Add information by SOA
+  labels <- sprintf(
+    "<strong>%s Ha of Greenspace for %g population</strong>",
+    round(mapdata$area/10000,0), mapdata$All.Ages
+  ) %>% lapply(htmltools::HTML)
+
+  leafletProxy("map") %>%
+   clearGroup("all") %>% 
+    addPolygons(data=mapdata, group="all",
+    fillColor = fillcolour,
+    weight = 1,
+    opacity = 1,
+    color = "white",
+    dashArray = "3",
+    fillOpacity = visibility,
+    highlight = highlightOptions(
+      weight = 5,
+      color = "#666",
+      dashArray = "",
+      fillOpacity = 0.7,
+      bringToFront = TRUE),
+      label = labels,
+      labelOptions = labelOptions(
+        style = list("font-weight" = "normal", padding = "3px 8px"),
+        textsize = "15px",
+        direction = "auto") ) %>%
+    clearGroup("chosen") %>%  # add selected polygon
+    addPolygons(data=greenspace.sf[isolate(clickval$polygon),], # use isolate render non-reactive to click
+      group="chosen",
+      fillColor = "red",
+      weight = 1,
+      opacity = 1,
+      color = "white",
+      dashArray = "3",
+      fillOpacity = visibility )
+  
+})  
+
+# Observe for click on polygon
+# ref: https://stackoverflow.com/questions/41710104/r-plot-matching-selected-polygon-in-leaflet-map
+
+observeEvent(input$map_shape_click, { # update the location selectInput on map clicks
+  p <- input$map_shape_click
+  point.sf<-st_point(c(p$lng,p$lat))
+  # print(point.sf)
+  clickval$polygon<-find_polygon(greenspace.sf,point.sf)
+  #print(paste("clickval$polygon=",clickval$polygon))
+  # OUTPUTS BASED ON CLICK VALUE
+  #  output$coord_output <- renderText({
+  #      paste("Polygon clicked: ",clickval$polygon, ". Population=",greenspace.sf$All_Ags[clickval$polygon])
+  #  })
+
+  # Create chart for selected polygon
+  output$chart_soa <- renderPlot({
+      ggplot(data = chartdata_2(), aes(x = type, y=area, fill=type)) +
+      geom_bar(stat = "identity")  +
+      labs(caption=paste("Selected polygon population=",greenspace.sf$All_Ags[clickval$polygon]),
+           x="Types of Greenspace", y = "Area within SOA (hectares)", fill="")+
+      theme_classic() +
+      theme(axis.text.x=element_blank(),legend.position="right") 
+  })
+  
+  # Outline selected polygon in different colour
+  visibility<-input$visibility.gsp
+  parameters<-map_change()
+  mapdata<-parameters[[1]]
+  fillcolour<-parameters[[2]]
+  
+   leafletProxy("map") %>%
+    clearGroup("chosen") %>% 
+    addPolygons(data=greenspace.sf[clickval$polygon,],
+      group="chosen",
+      fillColor = "red",
+      weight = 1,
+      opacity = 1,
+      color = "white",
+      dashArray = "3",
+      fillOpacity = visibility )
+    
+})
+
+```
+
+Column {data-width=400}
+------------------------------------------------------------------------------------------------------------
+###  Greenspace composition: all Cornwall
+```{r}
+plotOutput("chart_all")
+#textOutput("message_all")
+```
+
+###  Local composition: CLICK on map to select area
+
+```{r}
+plotOutput("chart_soa")
+```
+
+```{r, context='server'}
+# Uses fillCol to make sizing responsice - alternative is simpluy to use render statements or to renderPlotly
+# Use output in some way
+
+output$chart_all <-   renderPlot({
+      ggplot(data = chartdata_1(), aes(x = type, y=area, fill=type)) +
+      geom_bar(stat = "identity")  +
+      labs(x="Types of Greenspace", y = "Area in Cornwall (hectares)", fill="")+
+      theme_classic() +
+      theme(axis.text.x=element_blank(),legend.position="right") 
+    })
+
+fillCol(height = 600, flex = c(1, NA) , 
+  #plotOutput("chart_all", height="45%", width="100%"),
+  plotOutput("chart_soa", height="100%", width="100%"),
+  textOutput("message")
+)
+
+output$diagram<-renderDiagrammeR({
+DiagrammeR::mermaid("
+graph TD
+Z{OS Greenspaces}-->B[Trim to Cornwall & check projections]; Y{Open Access Land}-->B; 
+B-->C[Merge Greenspace & Open access polygons]; 
+C-->D[Greenspace area by type & SOA]; 
+D-->E[Merge Greenspace and Population data by SOA]; 
+X{Census Population by SOA}-->E
+E-->F[Reproject and save for App display];
+F-->G((Greenspace by Population))  "
+, height=200)
+})
+```
+
+Data Sources & Comments
+============================================================================================
+Column {data-width=400}
+-------------------------------------
+### Data Diagram{data-height=150 data-padding=20}
+```{r}
+DiagrammeROutput("diagram")
+```
+
+Column {data-width=600}
+-------------------------------------
+### Comments
+Map uses data from:
+(i) OS Greenspace, 
+(ii) Natural England Open Access Land and 
+(iii) Census population data.
+
+The maps show the area of greenspace by population using "super output areas"" used by the Census and each representing a similar size of population (hence urban SOAs much smaller than rural SOAs). 
+
+Including open access land has the largest effect on the distribution of greenspace per population, priviledging certain rural areas such as Bodmin moor.
+
+Further Developments
+
+1. Relatively simple additions might include:
+
+  (i) Alternative polygons to classify greenspace - instead of SOAs one could use postcode areas, Neighbourhood planning areas, AONB areas or other groupings of interest. Fairly reliable estimates of population can usually be made for all but the smaller areas.
+  (ii) Express greenspace as total greenspace area or as % of the total SOA area rather per head of population - the latter providing an indication of the spatial density of greenspace.
+  (iii) Include additional types or measures of greenspace, or alternative measures such as the length of footpaths within SOA.
+
+2. A similar approach could characterise areas by types of habitat or landcover or use, or indeed the density of traffic, noise etc per SOA/Postcode etc.
+
+3. An alternative approach might calculate a 'greenspace indicator' based not only on the total area of greenspace but applying weights according to the % of the population that makes use of that type of space and has access to the area.
+
+4. A complementary approach would provide information on access to greenspaces defined as the population within a set distance or travel time to a greenspace. From this a map of accessible greenspace per head of population might be developed (gridcell rather than polygon based) or a variety of other methods for displaying the information could be developed.
